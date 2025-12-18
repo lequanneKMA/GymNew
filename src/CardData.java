@@ -1,29 +1,41 @@
 /**
  * Represents data stored on a smart card.
- * Structure (11 bytes): [UserID(2)] [Balance(4)] [ExpiryDays(2)] [PackageType(1)] [PIN(1)] [PINRetry(1)]
+ * Structure (64 bytes): [UserID(2)] [Balance(4)] [ExpiryDays(2)] [PIN(1)] [PINRetry(1)] [DOB_Day(1)] [DOB_Month(1)] [DOB_Year(2)] [FullName(50)]
  * 
- * Note: Temporary lock (10 min after 3 wrong attempts) is handled by server, not card.
+ * Note: FullName is now stored directly on card (50 bytes UTF-8)
  */
 public class CardData {
     public int userId;           // 0-65535
+    public String fullName;      // Họ tên (lưu trên thẻ, 50 bytes UTF-8)
     public int balance;          // balance (4 bytes, max 2.1B)
     public short expiryDays;    // days until expiry
-    public byte packageType;     // 0=Basic, 1=Silver, 2=Gold, 3=Platinum
     public byte pin;             // simple PIN (1 byte = 0-255)
     public byte pinRetry;        // Retry counter: 5 → 0 (0 = permanently locked)
+    public byte dobDay;          // Date of birth - day (1-31)
+    public byte dobMonth;        // Date of birth - month (1-12)
+    public short dobYear;        // Date of birth - year (1900-2099)
     public static final byte MAX_PIN_RETRY = 5;
 
 
     public CardData() {
     }
 
-    public CardData(int userId, int balance, short expiryDays, byte packageType, byte pin, byte pinRetry) {
+    public CardData(int userId, int balance, short expiryDays, byte pin, byte pinRetry, byte dobDay, byte dobMonth, short dobYear) {
         this.userId = userId;
         this.balance = balance;
         this.expiryDays = expiryDays;
-        this.packageType = packageType;
         this.pin = pin;
         this.pinRetry = pinRetry;
+        this.dobDay = dobDay;
+        this.dobMonth = dobMonth;
+        this.dobYear = dobYear;
+    }
+
+    public String getDobString() {
+        if (dobDay == 0 || dobMonth == 0 || dobYear == 0) {
+            return "Chưa có";
+        }
+        return String.format("%02d/%02d/%04d", dobDay, dobMonth, dobYear);
     }
 
     /**
@@ -32,23 +44,10 @@ public class CardData {
     public boolean isLocked() {
         return pinRetry == 0;
     }
-    
-    /**
-     * Get package name
-     */
-    public String getPackageName() {
-        switch (packageType) {
-            case 0: return "Basic";
-            case 1: return "Silver";
-            case 2: return "Gold";
-            case 3: return "Platinum";
-            default: return "Unknown";
-        }
-    }
 
     @Override
     public String toString() {
-        return String.format("CardData{userId=%d, balance=%,d VND, expiryDays=%d, package=%s, pinRetry=%d/%d, locked=%s}",
-                userId, balance, expiryDays, getPackageName(), pinRetry, 5, isLocked() ? "YES" : "NO");
+        return String.format("CardData{userId=%d, fullName=%s, dob=%s, balance=%,d VND, expiryDays=%d, pinRetry=%d/%d, locked=%s}",
+                userId, fullName, getDobString(), balance, expiryDays, pinRetry, 5, isLocked() ? "YES" : "NO");
     }
 }

@@ -136,16 +136,21 @@ public class CustomerWindow extends JFrame {
     JPasswordField pinField = new JPasswordField();
     int opt = JOptionPane.showConfirmDialog(
         this,
-        new Object[]{"🔐 Nhập PIN (0–255):", pinField},
+        new Object[]{"🔐 Nhập PIN (6 chữ số):", pinField},
         "Xác Thực PIN",
         JOptionPane.OK_CANCEL_OPTION
     );
     if (opt != JOptionPane.OK_OPTION) return false;
 
     try {
-        int v = Integer.parseInt(new String(pinField.getPassword()));
-        if (v < 0 || v > 255) throw new NumberFormatException();
-        byte pin = (byte) v;
+        String pinStr = new String(pinField.getPassword());
+        // Kiểm tra phải đúng 6 chữ số
+        if (!pinStr.matches("\\d{6}")) {
+            throw new NumberFormatException("PIN phải là 6 chữ số");
+        }
+        int pinValue = Integer.parseInt(pinStr);
+        // Chuyển 6 số thành 1 byte (lấy 2 số cuối % 256)
+        byte pin = (byte) (pinValue % 256);
 
         ResponseAPDU r = pcsc.transmit(
             CardHelper.buildVerifyPinCommand(pin)
@@ -162,7 +167,7 @@ public class CustomerWindow extends JFrame {
         }
         return true;
     } catch (Exception e) {
-        JOptionPane.showMessageDialog(this, "PIN không hợp lệ");
+        JOptionPane.showMessageDialog(this, "❌ PIN phải là 6 chữ số (000000-999999)", "Lỗi", JOptionPane.ERROR_MESSAGE);
         return false;
     }
 }
@@ -252,7 +257,7 @@ public class CustomerWindow extends JFrame {
                 }
 
                 byte[] responseData = readResp.getData();
-                infoArea.append("[DEBUG] Response length: " + responseData.length + " bytes\n");
+                infoArea.append("[DEBUG] Response length: " + responseData.length + " bytes (expected 61)\n");
                 infoArea.append("[DEBUG] Response HEX: " + PcscClient.toHex(responseData) + "\n");
 
                 currentCard = CardHelper.parseReadResponse(responseData);
@@ -264,21 +269,34 @@ public class CustomerWindow extends JFrame {
                 return;
             }
 
+                // Yêu cầu nhập PIN ngay sau khi quẹt thẻ
+                SwingUtilities.invokeLater(() -> {
+                    if (!verifyPinDialog()) {
+                        infoArea.append("[HỦY] Xác thực PIN thất bại\n");
+                        statusLabel.setText("Thất bại: Sai PIN");
+                        statusLabel.setForeground(Color.RED);
+                        swipeBtn.setEnabled(true);
+                        return;
+                    }
 
-                // Broadcast card info to Staff window
-                CardEventBroadcaster.getInstance().broadcastCardSwipe(currentCard);
+                    infoArea.append("✅ PIN chính xác!\n\n");
+                    infoArea.append("✅ PIN chính xác!\n\n");
 
-                // Display card info on customer window
-                displayCardInfo();
+                    // Broadcast card info to Staff window
+                    CardEventBroadcaster.getInstance().broadcastCardSwipe(currentCard);
 
-                statusLabel.setText("Quẹt thẻ thành công!");
-                statusLabel.setForeground(new Color(50, 150, 50));
+                    // Display card info on customer window
+                    displayCardInfo();
 
-                personalInfoBtn.setEnabled(true);
-                renewBtn.setEnabled(true);
-                changePinBtn.setEnabled(true);
-                purchaseBtn.setEnabled(true);
-                topupBtn.setEnabled(true);
+                    statusLabel.setText("Quẹt thẻ thành công!");
+                    statusLabel.setForeground(new Color(50, 150, 50));
+
+                    personalInfoBtn.setEnabled(true);
+                    renewBtn.setEnabled(true);
+                    changePinBtn.setEnabled(true);
+                    purchaseBtn.setEnabled(true);
+                    topupBtn.setEnabled(true);
+                });
 
             } catch (Exception ex) {
                 infoArea.append("[LỖI] " + ex.getMessage() + "\n");
@@ -295,7 +313,10 @@ public class CustomerWindow extends JFrame {
             infoArea.setText("");
             infoArea.append("==== THÔNG TIN THẺ ====\n\n");
             infoArea.append("ID Thẻ: " + currentCard.userId + "\n");
-            infoArea.append("Số Dư: " + currentCard.balance + " VND\n");
+            if (currentCard.fullName != null && !currentCard.fullName.isEmpty()) {
+                infoArea.append("👤 Họ Tên: " + currentCard.fullName + "\n");
+            }
+            infoArea.append("Số Dư: " + String.format("%,d VND", currentCard.balance) + "\n");
             infoArea.append("Hạn Sử Dụng: " + currentCard.expiryDays + " ngày\n\n");
 
             if (currentCard.expiryDays <= 0) {
@@ -322,7 +343,6 @@ public class CustomerWindow extends JFrame {
         info.append("Retry Counter: ").append(currentCard.pinRetry).append("/5\n");
         info.append("\nSố Dư: ").append(currentCard.balance).append(" VND\n");
         info.append("Hạn Tập: ").append(currentCard.expiryDays).append(" ngày\n");
-        info.append("Gói: ").append(currentCard.getPackageName()).append("\n");
 
         JOptionPane.showMessageDialog(this, info.toString(), "Thông Tin Cá Nhân", JOptionPane.INFORMATION_MESSAGE);
     }
@@ -399,6 +419,12 @@ public class CustomerWindow extends JFrame {
         );
         
         if (confirm != JOptionPane.YES_OPTION) return;
+
+        // 🔐 Xác thực PIN trước khi ghi
+        if (!verifyPinDialog()) {
+            infoArea.append("[HỦY] Không thể xác thực PIN\n");
+            return;
+        }
 
         try {
             // Trừ tiền và cộng ngày
@@ -631,7 +657,7 @@ public class CustomerWindow extends JFrame {
 
         // Panel dưới: tổng tiền + thanh toán
         JPanel bottomPanel = new JPanel(new BorderLayout());
-        JLabel totalLabel = new JLabel("Tổng tiền: 0 VND");
+        JLabel totalLabel = new JLabel("💰 Tổng tiền: 0 VND");
         totalLabel.setFont(new Font("Arial", Font.BOLD, 14));
 
         JButton checkoutBtn = new JButton("THANH TOÁN");
@@ -647,7 +673,9 @@ public class CustomerWindow extends JFrame {
             }
 
             if (currentCard.balance < totalPrice) {
-                JOptionPane.showMessageDialog(shopFrame, "Số dư không đủ!\nCần: " + totalPrice + "VND\nCó: " + currentCard.balance + "VND");
+                JOptionPane.showMessageDialog(shopFrame, 
+                    "❌ Số dư không đủ!\n💰 Cần: " + String.format("%,d VND", totalPrice) + 
+                    "\n💳 Có: " + String.format("%,d VND", currentCard.balance));
                 return;
             }
 
@@ -656,10 +684,10 @@ public class CustomerWindow extends JFrame {
             bill.append("=== HOÁ ĐƠN ===\n");
             for (StoreItem item : cart) {
                 bill.append(item.name).append(" x").append(item.quantity)
-                    .append(" = ").append(item.quantity * item.price).append("₫\n");
+                    .append(" = ").append(String.format("%,d", item.quantity * item.price)).append("₫\n");
             }
             bill.append("---\n");
-            bill.append("TỔNG CỘNG: " + totalPrice + "₫\n\n");
+            bill.append("💰 TỔNG CỘNG: " + String.format("%,d", totalPrice) + "₫\n\n");
             bill.append("Vui lòng chờ nhân viên xác nhận...");
 
             infoArea.append("\n[CHỜ XÁC NHẬN] Gửi đơn hàng:\n");
@@ -749,10 +777,10 @@ public class CustomerWindow extends JFrame {
             cartModel.clear();
             int total = 0;
             for (StoreItem item : cart) {
-                cartModel.addElement(item.name + " x" + item.quantity + " = " + (item.quantity * item.price) + "₫");
+                cartModel.addElement(item.name + " x" + item.quantity + " = " + String.format("%,d", item.quantity * item.price) + "₫");
                 total += item.quantity * item.price;
             }
-            totalLabel.setText("Tổng tiền: " + total + " VND");
+            totalLabel.setText("💰 Tổng tiền: " + String.format("%,d VND", total));
         });
         updateTimer.start();
 
@@ -796,7 +824,7 @@ public class CustomerWindow extends JFrame {
             }
         }
 
-        infoArea.append("\n[TIẾN HÀNH] Nạp " + amount + " VND...\n");
+        infoArea.append("\n[TIẾN HÀNH] Nạp " + String.format("%,d VND", amount) + "...\n");
         
         // 💳 Chọn phương thức thanh toán
         String[] methods = {"💵 Tiền Mặt", "📱 QR Code"};
@@ -855,59 +883,58 @@ public class CustomerWindow extends JFrame {
         
         // Chạy approval trong background thread để không block UI
         new Thread(() -> {
-            boolean approved = CardEventBroadcaster.getInstance()
-                .requestTopupApproval(finalAmount, finalPaymentMethod);
-            
-            SwingUtilities.invokeLater(() -> {
-                if (!approved) {
-                    infoArea.append("[✗ TỪ CHỐI] Nhân viên từ chối giao dịch!\n");
-                    JOptionPane.showMessageDialog(
-                        this, 
-                        "❌ Nhân viên từ chối nạp tiền!", 
-                        "Thất Bại", 
-                        JOptionPane.ERROR_MESSAGE
-                    );
-                    return;
-                }
-                
-                infoArea.append("[✓ CHẤP NHẬN] Nhân viên đã xác nhận!\n");
-                if (!verifyPinDialog()) {
-                    infoArea.append("[HỦY] Xác thực PIN thất bại\n");
-                    return;
-}
-                // Cộng số dư và ghi vào thẻ
-                currentCard.balance = currentCard.balance + finalAmount;
 
-                try {
-                    javax.smartcardio.CommandAPDU writeCmd = CardHelper.buildWriteCommand(currentCard);
-                    javax.smartcardio.ResponseAPDU writeResp = pcsc.transmit(writeCmd);
+    boolean approved = CardEventBroadcaster.getInstance()
+        .requestTopupApproval(finalAmount, finalPaymentMethod);
 
-                    if ((writeResp.getSW() & 0xFF00) == 0x9000) {
-                        infoArea.append("[OK] Nạp tiền thành công!\n");
-                        infoArea.append("Số tiền nạp: +" + String.format("%,d VND", finalAmount) + "\n");
-                        infoArea.append("Số dư mới: " + String.format("%,d VND", currentCard.balance) + "\n");
-                        displayCardInfo();
-                        
-                        // 🔄 Broadcast để Staff thấy số dư mới
-                        CardEventBroadcaster.getInstance().broadcastCardSwipe(currentCard);
-                        
-                        JOptionPane.showMessageDialog(
-                            this, 
-                            "✅ Nạp tiền thành công!\n💰 Số dư: " + String.format("%,d VND", currentCard.balance), 
-                            "Hoàn Tất", 
-                            JOptionPane.INFORMATION_MESSAGE
-                        );
-                    } else {
-                        infoArea.append("[LỖI] Nạp tiền thất bại (SW: " + Integer.toHexString(writeResp.getSW()) + ")\n");
-                        // Rollback
-                        currentCard.balance = currentCard.balance - finalAmount;
-                    }
-                } catch (Exception ex) {
-                    infoArea.append("[LỖI] " + ex.getMessage() + "\n");
-                    currentCard.balance = currentCard.balance - finalAmount;
-                }
-            });
-        }).start();
+    if (!approved) {
+        SwingUtilities.invokeLater(() ->
+            infoArea.append("[✗ TỪ CHỐI] Nhân viên từ chối giao dịch\n")
+        );
+        return;
+    }
+
+    SwingUtilities.invokeLater(() -> {
+        infoArea.append("[✓ CHẤP NHẬN] Nhân viên đã xác nhận!\n");
+        
+        // 🔐 VERIFY PIN – Phải chạy trong EDT để dialog hiển thị đúng
+        if (!verifyPinDialog()) {
+            infoArea.append("[HỦY] Xác thực PIN thất bại\n");
+            return;
+        }
+
+        // 💾 WRITE – Sau khi PIN đã verify
+        currentCard.balance += finalAmount;
+
+        try {
+            javax.smartcardio.CommandAPDU writeCmd =
+                CardHelper.buildWriteCommand(currentCard);
+            javax.smartcardio.ResponseAPDU writeResp =
+                pcsc.transmit(writeCmd);
+
+            if (writeResp.getSW() == 0x9000) {
+                infoArea.append("[OK] Nạp tiền thành công!\n");
+                infoArea.append("💰 Đã nạp: " + String.format("%,d VND", finalAmount) + "\n");
+                infoArea.append("💳 Số dư mới: " + String.format("%,d VND", currentCard.balance) + "\n");
+                displayCardInfo();
+                CardEventBroadcaster.getInstance()
+                    .broadcastCardSwipe(currentCard);
+            } else {
+                infoArea.append("[LỖI] Nạp tiền thất bại (SW: " +
+                    Integer.toHexString(writeResp.getSW()) + ")\n");
+                // Rollback
+                currentCard.balance -= finalAmount;
+            }
+
+        } catch (Exception e) {
+            infoArea.append("[LỖI] " + e.getMessage() + "\n");
+            // Rollback
+            currentCard.balance -= finalAmount;
+        }
+    });
+
+}).start();
+
     }
 
     public static void main(String[] args) {

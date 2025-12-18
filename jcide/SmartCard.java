@@ -6,8 +6,8 @@ import javacard.framework.*;
  * Gym Smart Card Applet - Phase 1: PIN Security (Simplified)
  * Chuẩn ISO 7816-4 với PIN retry counter
  * 
- * Cấu trúc: 11 bytes
- * [UserID(2)] [Balance(4)] [ExpiryDays(2)] [PackageType(1)] [PIN(1)] [PINRetry(1)]
+ * Cấu trúc: 61 bytes
+ * [UserID(2)] [Balance(4)] [ExpiryDays(2)] [PackageType(1)] [PIN(1)] [PINRetry(1)] [FullName(50)]
  * 
  * Lưu ý: Khóa tạm thời được xử lý ở server, thẻ chỉ quản lý retry counter
  */
@@ -19,9 +19,9 @@ public class SmartCard extends Applet {
     private static final byte INS_CHANGE_PIN = (byte) 0x24; // CHANGE REFERENCE DATA (ISO)
     private static final byte INS_UNBLOCK_PIN = (byte) 0x2C; // RESET RETRY COUNTER (ISO)
     
-    // Data structure (11 bytes - simplified)
+    // Data structure (61 bytes - with full name)
     private byte[] cardData;
-    private static final short DATA_SIZE = 11;
+    private static final short DATA_SIZE = 61;
     
     // Field offsets
     private static final short OFFSET_USER_ID = 0;       // 2 bytes
@@ -30,6 +30,7 @@ public class SmartCard extends Applet {
     private static final short OFFSET_PACKAGE = 8;       // 1 byte (0=Basic, 1=Silver, 2=Gold)
     private static final short OFFSET_PIN = 9;           // 1 byte
     private static final short OFFSET_PIN_RETRY = 10;    // 1 byte (5 → 0)
+    private static final short OFFSET_FULLNAME = 11;     // 50 bytes (UTF-8)
     
     // Security constants
     private static final byte MAX_PIN_TRIES = 5;
@@ -211,7 +212,6 @@ public class SmartCard extends Applet {
         
         // Reset PIN retry counter and unlock
         cardData[OFFSET_PIN_RETRY] = MAX_PIN_TRIES;
-        setInt(cardData, OFFSET_LOCK_TIME, 0);
         pinVerified = false;
         
         // Return 9000 (success)
@@ -220,8 +220,8 @@ public class SmartCard extends Applet {
     /**
      * READ BINARY (0xB0) - Read all card data
      * 
-     * Request: 00 B0 00 00 0F
-     * Response: [15 bytes of data]
+     * Request: 00 B0 00 00 3D (61 bytes)
+     * Response: [61 bytes of data]
      */
     private void handleRead(APDU apdu) {
         byte[] buf = apdu.getBuffer();
@@ -232,44 +232,25 @@ public class SmartCard extends Applet {
     /**
      * UPDATE BINARY (0xD0) - Write card data (requires PIN)
      * 
-     * Request: 00 D0 00 00 0F [15 bytes]
-     * Response:
-     *  pinVerified = false;
-        
-        // Return 9000 (success)
-    }
-    
-    /**
-     * READ BINARY (0xB0) - Read all card data
-     * 
-     * Request: 00 B0 00 00 0B
-     * Response: [11 bytes of data]
-     */
-    private void handleRead(APDU apdu) {
-        byte[] buf = apdu.getBuffer();
-        Util.arrayCopyNonAtomic(cardData, (short) 0, buf, (short) 0, DATA_SIZE);
-        apdu.setOutgoingAndSend((short) 0, DATA_SIZE);
-    }
-    
-    /**
-     * UPDATE BINARY (0xD0) - Write card data (requires PIN)
-     * 
-     * Request: 00 D0 00 00 0B [11 bytes]
+     * Request: 00 D0 00 00 3D [61 bytes]
      * Response:
      *   9000 - Success
      *   6982 - PIN not verified
      */
     private void handleWrite(APDU apdu) {
-        // Must verify PIN before writing
-        if (!pinVerified) {
-            ISOException.throwIt(ISO7816.SW_SECURITY_STATUS_NOT_SATISFIED); // 6982
-        }
-        
         byte[] buf = apdu.getBuffer();
         byte numBytes = (byte) apdu.setIncomingAndReceive();
         
         if (numBytes < DATA_SIZE) {
             ISOException.throwIt(ISO7816.SW_WRONG_LENGTH);
+        }
+        
+        // Check if card is blank (userId = 0) - allow first-time initialization
+        boolean isBlankCard = (cardData[OFFSET_USER_ID] == 0) && (cardData[OFFSET_USER_ID + 1] == 0);
+        
+        // Must verify PIN before writing (except for blank card initialization)
+        if (!isBlankCard && !pinVerified) {
+            ISOException.throwIt(ISO7816.SW_SECURITY_STATUS_NOT_SATISFIED); // 6982
         }
         
         // Copy data to card (preserve PIN retry counter)
@@ -281,3 +262,4 @@ public class SmartCard extends Applet {
         cardData[OFFSET_PIN_RETRY] = oldRetry;
         pinVerified = false; // Require re-verification after write
     }
+}

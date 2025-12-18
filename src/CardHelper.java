@@ -18,20 +18,20 @@ public class CardHelper {
     public static final byte INS_UNBLOCK_PIN = (byte) 0x2C;
 
     /**
-     * Build: 00 B0 00 00 0B (read 11 bytes - Simplified format)
+     * Build: 00 B0 00 00 40 (read 64 bytes - with DOB and full name)
      * ISO 7816-4 READ BINARY command
      */
     public static CommandAPDU buildReadCommand() {
-        return new CommandAPDU(0x00, INS_READ, 0x00, 0x00, 0x0B); // Le = 11 bytes
+        return new CommandAPDU(0x00, INS_READ, 0x00, 0x00, 0x40); // Le = 64 bytes (0x40)
     }
 
     /**
-     * Build: 00 D0 00 00 0B [data...] (write 11 bytes)
+     * Build: 00 D0 00 00 40 [data...] (write 64 bytes)
      * ISO 7816-4 UPDATE BINARY command
-     * Format: [userID(2)] [balance(4)] [expiryDays(2)] [packageType(1)] [pin(1)] [pinRetry(1)]
+     * Format: [userID(2)] [balance(4)] [expiryDays(2)] [pin(1)] [pinRetry(1)] [dobDay(1)] [dobMonth(1)] [dobYear(2)] [fullName(50)]
      */
     public static CommandAPDU buildWriteCommand(CardData card) {
-        byte[] data = new byte[11];
+        byte[] data = new byte[64];
         
         // UserID (2 bytes)
         data[0] = (byte) ((card.userId >> 8) & 0xFF);
@@ -47,14 +47,32 @@ public class CardHelper {
         data[6] = (byte) ((card.expiryDays >> 8) & 0xFF);
         data[7] = (byte) (card.expiryDays & 0xFF);
         
-        // PackageType (1 byte)
-        data[8] = card.packageType;
-        
         // PIN (1 byte)
-        data[9] = card.pin;
+        data[8] = card.pin;
         
-        // PINRetry (1 byte) - will be preserved by card
-        data[10] = card.pinRetry;
+        // PINRetry (1 byte)
+        data[9] = card.pinRetry;
+        
+        // DOB Day (1 byte)
+        data[10] = card.dobDay;
+        
+        // DOB Month (1 byte)
+        data[11] = card.dobMonth;
+        
+        // DOB Year (2 bytes)
+        data[12] = (byte) ((card.dobYear >> 8) & 0xFF);
+        data[13] = (byte) (card.dobYear & 0xFF);
+        
+        // FullName (50 bytes) - UTF-8 encoded
+        if (card.fullName != null && !card.fullName.isEmpty()) {
+            try {
+                byte[] nameBytes = card.fullName.getBytes("UTF-8");
+                int len = Math.min(nameBytes.length, 50);
+                System.arraycopy(nameBytes, 0, data, 14, len);
+            } catch (Exception e) {
+                // Ignore encoding errors
+            }
+        }
         
         return new CommandAPDU(0x00, INS_WRITE, 0x00, 0x00, data);
     }
@@ -87,12 +105,12 @@ public class CardHelper {
     }
 
     /**
-     * Parse response from READ command. Expects 11-byte format.
-     * Format: [UserID(2) | Balance(4) | ExpiryDays(2) | PackageType(1) | PIN(1) | PINRetry(1)]
+     * Parse response from READ command. Expects 64-byte format.
+     * Format: [UserID(2) | Balance(4) | ExpiryDays(2) | PIN(1) | PINRetry(1) | DOB_Day(1) | DOB_Month(1) | DOB_Year(2) | FullName(50)]
      */
     public static CardData parseReadResponse(byte[] data) {
-        if (data.length < 11) {
-            throw new IllegalArgumentException("Response too short: " + data.length + " (need 11)");
+        if (data.length < 64) {
+            throw new IllegalArgumentException("Response too short: " + data.length + " (need 64)");
         }
         
         CardData card = new CardData();
@@ -107,14 +125,37 @@ public class CardHelper {
         // ExpiryDays (2 bytes)
         card.expiryDays = (short) (((data[6] & 0xFF) << 8) | (data[7] & 0xFF));
         
-        // PackageType (1 byte)
-        card.packageType = data[8];
-        
         // PIN (1 byte)
-        card.pin = data[9];
+        card.pin = data[8];
         
         // PINRetry (1 byte)
-        card.pinRetry = data[10];
+        card.pinRetry = data[9];
+        
+        // DOB Day (1 byte)
+        card.dobDay = data[10];
+        
+        // DOB Month (1 byte)
+        card.dobMonth = data[11];
+        
+        // DOB Year (2 bytes)
+        card.dobYear = (short) (((data[12] & 0xFF) << 8) | (data[13] & 0xFF));
+        
+        // FullName (50 bytes) - UTF-8 decode
+        try {
+            // Find actual length (until null byte or end)
+            int nameLen = 0;
+            for (int i = 14; i < 64; i++) {
+                if (data[i] == 0) break;
+                nameLen++;
+            }
+            if (nameLen > 0) {
+                card.fullName = new String(data, 14, nameLen, "UTF-8").trim();
+            } else {
+                card.fullName = "";
+            }
+        } catch (Exception e) {
+            card.fullName = "";
+        }
         
         return card;
     }
